@@ -1,0 +1,21 @@
+<!doctype html><html lang="pt-BR"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Espelho Remoto</title><style>body{font:16px system-ui;background:#111827;color:#f9fafb;margin:0;padding:24px}main{max-width:900px;margin:auto}video{background:#000;width:100%;max-height:75vh;border-radius:12px}p{color:#cbd5e1}</style></head><body><main><h1>Espelho Remoto</h1><p id="status">Conectando…</p><video id="video" autoplay playsinline controls muted></video><p>O link da sessão concede acesso à visualização. Não o compartilhe publicamente.</p></main><script src="/socket.io/socket.io.js"></script><script>
+const status = document.getElementById('status');
+const id = location.hash.match(/^#\/watch\/([a-f0-9]{48})$/)?.[1];
+if (!id) status.textContent='Link inválido. Abra o endereço fornecido pelo aplicativo.';
+else {
+ const socket=io({transports:['websocket','polling']});
+ let pc=null; const pending=[];
+ function createPeer(){
+   pc=new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});
+   pc.ontrack=e=>{document.getElementById('video').srcObject=e.streams[0];status.textContent='Recebendo transmissão.';};
+   pc.onicecandidate=e=>{if(e.candidate)socket.emit('ice',{candidate:e.candidate.toJSON()});};
+   pc.onconnectionstatechange=()=>{status.textContent='Conexão: '+pc.connectionState;};
+ }
+ socket.on('connect',()=>socket.emit('join',{sessionId:id,role:'viewer'}));
+ socket.on('joined',()=>status.textContent='Aguardando vídeo…');
+ socket.on('session-error',e=>status.textContent=e);
+ socket.on('session-ended',()=>{pc?.close();pc=null;document.getElementById('video').srcObject=null;status.textContent='Sessão encerrada.';});
+ socket.on('offer',async d=>{try{pc?.close();createPeer();await pc.setRemoteDescription({type:'offer',sdp:d.sdp});for(const c of pending.splice(0))await pc.addIceCandidate(c);const answer=await pc.createAnswer();await pc.setLocalDescription(answer);socket.emit('answer',{sdp:answer.sdp});}catch(e){status.textContent='Falha na negociação: '+e.message;}});
+ socket.on('ice',async d=>{try{if(!d.candidate)return;if(pc?.remoteDescription)await pc.addIceCandidate(d.candidate);else pending.push(d.candidate);}catch(e){console.warn(e);}});
+}
+</script></body></html>
