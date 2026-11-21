@@ -1,0 +1,9 @@
+{
+  "name": "espelho-remoto-signaling",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": { "start": "node index.js", "check": "node --check index.js" },
+  "dependencies": { "express": "^4.21.2", "socket.io": "^4.8.1" }
+}
