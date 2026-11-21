@@ -27,6 +27,9 @@ class ScreenCaptureService : Service() {
     private var source: VideoSource? = null
     private var track: VideoTrack? = null
     private var socket: Socket? = null
+    private val pendingRemoteIce = mutableListOf<IceCandidate>()
+    private var remoteDescriptionReady = false
+    private var viewerActive = false
     override fun onBind(intent: Intent?): IBinder? = null
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent == null) { stopSelf(); return START_NOT_STICKY }
@@ -100,9 +103,9 @@ class ScreenCaptureService : Service() {
         })
         track?.let { peer?.addTrack(it, listOf("screen-stream")) }
     }
-    private fun observer(onCreate: ((SessionDescription) -> Unit)? = null) = object : SdpObserver {
+    private fun observer(onCreate: ((SessionDescription) -> Unit)? = null, onSet: (() -> Unit)? = null) = object : SdpObserver {
         override fun onCreateSuccess(s: SessionDescription) { onCreate?.invoke(s) }
-        override fun onSetSuccess() {}
+        override fun onSetSuccess() { onSet?.invoke() }
         override fun onCreateFailure(e: String?) { android.util.Log.e("EspelhoRemoto", "SDP create: $e") }
         override fun onSetFailure(e: String?) { android.util.Log.e("EspelhoRemoto", "SDP set: $e") }
     }
@@ -112,21 +115,38 @@ class ScreenCaptureService : Service() {
             socket?.emit("join", JSONObject().put("sessionId", session).put("role", "broadcaster"))
         }
         socket!!.on("viewer-joined") {
-            peer?.createOffer(observer { description ->
-                peer?.setLocalDescription(observer(), description)
-                socket?.emit("offer", JSONObject().put("sdp", description.description))
-            }, MediaConstraints())
+            viewerActive = true
+            peer?.createOffer(observer(onCreate = { description ->
+                peer?.setLocalDescription(observer(onSet = {
+                    if (viewerActive) socket?.emit("offer", JSONObject().put("sdp", description.description))
+                }), description)
+            }), MediaConstraints())
         }
         socket!!.on("answer") { args ->
             val obj = args.firstOrNull() as? JSONObject ?: return@on
-            peer?.setRemoteDescription(observer(), SessionDescription(SessionDescription.Type.ANSWER, obj.getString("sdp")))
+            peer?.setRemoteDescription(observer(onSet = {
+                remoteDescriptionReady = true
+                synchronized(pendingRemoteIce) {
+                    pendingRemoteIce.forEach { peer?.addIceCandidate(it) }
+                    pendingRemoteIce.clear()
+                }
+            }), SessionDescription(SessionDescription.Type.ANSWER, obj.getString("sdp")))
         }
         socket!!.on("ice") { args ->
             val obj = args.firstOrNull() as? JSONObject ?: return@on
             val c = obj.optJSONObject("candidate") ?: return@on
-            peer?.addIceCandidate(IceCandidate(c.optString("sdpMid"), c.optInt("sdpMLineIndex"), c.getString("candidate")))
+            val candidate = IceCandidate(c.optString("sdpMid"), c.optInt("sdpMLineIndex"), c.getString("candidate"))
+            synchronized(pendingRemoteIce) {
+                if (remoteDescriptionReady) peer?.addIceCandidate(candidate)
+                else pendingRemoteIce.add(candidate)
+            }
         }
-        socket!!.on("viewer-left") { android.util.Log.d("EspelhoRemoto", "Viewer disconnected") }
+        socket!!.on("viewer-left") {
+            viewerActive = false
+            remoteDescriptionReady = false
+            synchronized(pendingRemoteIce) { pendingRemoteIce.clear() }
+            android.util.Log.d("EspelhoRemoto", "Viewer disconnected")
+        }
         socket!!.connect()
     }
     override fun onDestroy() {
