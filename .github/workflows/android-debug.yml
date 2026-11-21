@@ -24,7 +24,14 @@ jobs:
         run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - name: Build debug APK
         working-directory: android
-        run: gradle --no-daemon assembleDebug
+        run: gradle --no-daemon --stacktrace --console=plain assembleDebug
+      - name: Print build diagnostics on failure
+        if: failure()
+        working-directory: android
+        run: |
+          echo 'Android build failed. Check the Build debug APK step above for the first FAILURE or e: diagnostic.'
+          java -version
+          gradle --version
       - uses: actions/upload-artifact@v4
         with:
           name: EspelhoRemoto-debug-apk
